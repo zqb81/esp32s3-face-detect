@@ -34,17 +34,27 @@ import _thread
 import voice_hal as voice_hw
 import voice_client as voice
 
-# ===== 配置 =====
-WIFI_SSID = "APP"
-WIFI_PASS = "123456789"
-MQTT_BROKER = "101.33.209.65"
-MQTT_PORT = 1883
-MQTT_TOPIC = "esp32/face_detect"
-CLIENT_ID = "esp32s3_face"
+# ===== 配置（从 config.json 读取，改配置不用改代码）=====
+def _load_config():
+    try:
+        with open("config.json", "r") as f:
+            return json.loads(f.read())
+    except Exception as e:
+        print("[WARN] config.json 读取失败:", e, "，使用默认值")
+        return {}
+
+_cfg = _load_config()
+WIFI_SSID   = _cfg.get("wifi_ssid", "APP")
+WIFI_PASS   = _cfg.get("wifi_pass", "123456789")
+MQTT_BROKER = _cfg.get("mqtt_broker", "101.33.209.65")
+MQTT_PORT   = _cfg.get("mqtt_port", 1883)
+MQTT_TOPIC  = _cfg.get("mqtt_topic", "esp32/face_detect")
+CLIENT_ID   = _cfg.get("client_id", "esp32s3_face")
 
 # ===== 语音 Server 配置 =====
-voice.SERVER_IP = MQTT_BROKER   # 复用 MQTT broker IP 作为语音 Server
-voice.SERVER_PORT = 9000
+voice.SERVER_IP   = _cfg.get("voice_server_ip", MQTT_BROKER)
+voice.SERVER_PORT = _cfg.get("voice_server_port", 9000)
+del _cfg  # 释放内存
 
 # ===== 人脸检测控制 =====
 face_detect_enabled = True

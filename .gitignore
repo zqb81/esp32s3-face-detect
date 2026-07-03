@@ -10,3 +10,4 @@ micropython-camera-API/
 mp_jpeg/
 .env
 .claude/
+main/config.json

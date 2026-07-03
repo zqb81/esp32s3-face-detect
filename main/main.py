@@ -84,14 +84,6 @@ BOX_SCALE = 1.3  # 检测框放大系数
 CROP_SIZE = 64   # 人脸裁剪尺寸
 CROP_INTERVAL = 1000  # 最短上传间隔(ms)
 
-# ===== 颜色 (RGB565 big-endian) =====
-BLACK  = 0x0000
-WHITE  = 0xFFFF
-GREEN  = 0x07E0
-RED    = 0xF800
-YELLOW = 0xFFE0
-BLUE   = 0x001F
-
 # ===== 全局Buffer（避免每帧分配）=====
 _tft_buf = bytearray(DST_W * DST_H * 2)
 
@@ -276,7 +268,7 @@ def rtc_to_timestamp():
 
 def _set_manual_time():
     import machine
-    machine.RTC().datetime((2026, 4, 2, 4, 2, 20, 0, 0))
+    machine.RTC().datetime((2026, 7, 4, 5, 12, 0, 0, 0))
     print(f"手动时间: {machine.RTC().datetime()}")
 
 
@@ -321,7 +313,7 @@ def connect_mqtt():
         mqtt_ok = False
         print(f"MQTT 失败: {e}")
 
-def send_mqtt(faces):
+def send_mqtt(faces, frame_no=0):
     global mqtt_ok
     if not mqtt_ok or not faces:
         return
@@ -330,6 +322,7 @@ def send_mqtt(faces):
             "device": CLIENT_ID,
             "ts": rtc_to_timestamp(),
             "time": get_timestamp(),
+            "frame": frame_no,
             "count": len(faces),
             "faces": [{
                 "score": round(f["score"], 3),
@@ -590,7 +583,7 @@ try:
         if HAS_DETECTOR and face_detect_enabled and frame % 5 == 0:
             result = detector.run(img)
             last_faces = result if result else []
-            send_mqtt(last_faces)
+            send_mqtt(last_faces, frame)
             # 上传人脸裁剪图（取置信度最高的一张）
             if last_faces:
                 best = max(last_faces, key=lambda f: f["score"])

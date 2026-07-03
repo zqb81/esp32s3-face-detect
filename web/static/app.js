@@ -249,20 +249,20 @@ async function toggleDevice(device, btn) {
     }
 }
 
-// ===== 传感器轮询 =====
-async function loadSensors() {
+// ===== RGB 灯带 =====
+async function setRgb(color) {
     try {
-        const res = await fetch('/api/sensors');
-        const data = await res.json();
-        document.getElementById('s-temp').textContent = data.temperature != null ? data.temperature + '°C' : '--';
-        document.getElementById('s-humi').textContent = data.humidity != null ? data.humidity + '%' : '--';
-        document.getElementById('s-light').textContent = data.light != null ? data.light : '--';
-    } catch (e) {}
+        await fetch('/api/device', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'rgb', state: 'on', color: color })
+        });
+    } catch (e) {
+        console.error('RGB 控制失败:', e);
+    }
 }
 
 // ===== 初始化 =====
 loadStats();
 loadHistory();
 loadFaceImages();
-loadSensors();
-setInterval(loadSensors, 5000);

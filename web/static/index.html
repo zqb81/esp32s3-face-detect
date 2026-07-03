@@ -55,22 +55,7 @@
             </div>
             <div class="panel">
                 <div class="panel-header"><span>🎛️ 设备控制</span></div>
-                <div class="sensor-row" id="sensor-row">
-                    <div class="sensor-item">🌡️ 温度: <span class="val" id="s-temp">--</span></div>
-                    <div class="sensor-item">💧 湿度: <span class="val" id="s-humi">--</span></div>
-                    <div class="sensor-item">☀️ 光照: <span class="val" id="s-light">--</span></div>
-                </div>
                 <div class="device-grid">
-                    <div class="device-card">
-                        <div class="icon">🌀</div>
-                        <div class="name">风扇</div>
-                        <button class="toggle-btn off" id="btn-fan" onclick="toggleDevice('fan',this)"></button>
-                    </div>
-                    <div class="device-card">
-                        <div class="icon">💡</div>
-                        <div class="name">LED</div>
-                        <button class="toggle-btn off" id="btn-led" onclick="toggleDevice('led',this)"></button>
-                    </div>
                     <div class="device-card">
                         <div class="icon">🔔</div>
                         <div class="name">蜂鸣器</div>
@@ -80,6 +65,19 @@
                         <div class="icon">👁️</div>
                         <div class="name">人脸检测</div>
                         <button class="toggle-btn on" id="btn-face" onclick="toggleDevice('face_detect',this)"></button>
+                    </div>
+                    <div class="device-card" style="grid-column: 1/-1">
+                        <div class="icon">🌈</div>
+                        <div class="name">RGB 灯带</div>
+                        <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:4px">
+                            <button onclick="setRgb('red')" style="background:#ef4444;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer"></button>
+                            <button onclick="setRgb('green')" style="background:#22c55e;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer"></button>
+                            <button onclick="setRgb('blue')" style="background:#3b82f6;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer"></button>
+                            <button onclick="setRgb('yellow')" style="background:#eab308;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer"></button>
+                            <button onclick="setRgb('purple')" style="background:#a855f7;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer"></button>
+                            <button onclick="setRgb('white')" style="background:#fff;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer"></button>
+                            <button onclick="setRgb('off')" style="background:#334155;width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;color:#94a3b8;font-size:10px;line-height:28px">OFF</button>
+                        </div>
                     </div>
                 </div>
             </div>

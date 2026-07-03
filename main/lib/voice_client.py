@@ -13,8 +13,8 @@ MSG_CMD   = 0x02
 MSG_DONE  = 0x03
 _MAX_FRAME_LEN = 256 * 1024
 
-# ===== Server 配置 =====
-SERVER_IP = "101.33.209.65"
+# ===== Server 配置（由 main.py 从 config.json 覆盖）=====
+SERVER_IP = ""
 SERVER_PORT = 9000
 
 # ===== TCP 帧收发 =====

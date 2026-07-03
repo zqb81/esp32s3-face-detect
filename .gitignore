@@ -11,4 +11,5 @@ mp_jpeg/
 web/.env
 web/venv/
 .claude/
+.vscode/
 main/config.json

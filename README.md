@@ -51,9 +51,48 @@
 | WS2812 RGB | 38 |
 | 蜂鸣器 PWM | 48 |
 
+## 快速开始
+
+### 1. 烧录固件
+
+```bash
+# 进入下载模式：按住 BOOT → 按 RST → 松开 BOOT
+cd dist
+bash flash.sh COM9
+```
+
+### 2. 上传设备代码
+
+编辑 `main/config.json` 填入 WiFi 和服务器地址：
+
+```json
+{
+    "wifi_ssid": "你的WiFi",
+    "wifi_pass": "密码",
+    "mqtt_broker": "服务器IP",
+    "voice_server_ip": "服务器IP"
+}
+```
+
+```bash
+cd main
+bash upload.sh COM9
+```
+
+### 3. 启动服务端
+
+编辑 `web/.env` 填入配置（尤其是 `XIAOMI_API_KEY`）：
+
+```bash
+cd web
+bash start.sh
+```
+
+Web 页面：`http://服务器IP:8080`
+
 ## 固件编译
 
-需要带 `espdl` 模块的 MicroPython 固件，使用 [mp_esp_dl_models](https://github.com/cnadler86/mp_esp_dl_models) 构建。
+预编译固件在 `dist/firmware_v2.1.bin`，如需自行编译：
 
 ### 依赖
 
@@ -63,104 +102,71 @@
 - [micropython-camera-API](https://github.com/cnadler86/micropython-camera-API)
 - [mp_jpeg](https://github.com/cnadler86/mp_jpeg)
 
-### 编译步骤
+### 编译步骤（WSL 推荐）
 
 ```bash
 # 克隆依赖
 git clone --recursive https://github.com/cnadler86/mp_esp_dl_models.git
-git clone https://github.com/cnadler86/micropython-camera-API.git
+git clone --recursive https://github.com/cnadler86/micropython-camera-API.git
 git clone https://github.com/cnadler86/mp_jpeg.git
 git clone https://github.com/micropython/micropython.git
 cd micropython && git checkout v1.26.0 && cd ..
 
+# 修复 IDF 5.4.x 兼容性
+sed -i 's/WIFI_AUTH_MAX == 16/WIFI_AUTH_MAX >= 16/' micropython/ports/esp32/network_wlan.c
+
+# 修复 cmake 路径（micropython.cmake 在仓库根目录，构建系统期望 src/ 下）
+sed -i 's|${MP_CAMERA_DIR}/src/micropython.cmake|${MP_CAMERA_DIR}/micropython.cmake|g' mp_esp_dl_models/src/micropython.cmake
+sed -i 's|${MP_JPEG_DIR}/src/micropython.cmake|${MP_JPEG_DIR}/micropython.cmake|g' mp_esp_dl_models/src/micropython.cmake
+
 # 激活 IDF 环境后编译（N16R8 = SPIRAM_OCT 变体）
 cd mp_esp_dl_models/boards
 idf.py \
-  -D MICROPY_DIR=/path/to/micropython \
+  -D MICROPY_DIR=$HOME/esp/mp \
   -D MICROPY_BOARD=ESP32_GENERIC_S3 \
   -D MICROPY_BOARD_VARIANT=SPIRAM_OCT \
   -D MP_DL_FACE_DETECTOR_ENABLED=1 \
-  -B build-n16r8 build
+  -D MP_DL_FACE_RECOGNITION_ENABLED=1 \
+  -D MP_DL_PEDESTRIAN_DETECTOR_ENABLED=1 \
+  -D MP_CAMERA_DIR=$HOME/esp/cam \
+  -D MP_JPEG_DIR=$HOME/esp/jpg \
+  -D EXTRA_COMPONENT_DIRS=$HOME/esp/cam \
+  -B build-n16r8 \
+  build
 
 # 生成固件
 cd build-n16r8
-python /path/to/micropython/ports/esp32/makeimg.py \
-  sdkconfig \
-  bootloader/bootloader.bin \
+python $HOME/esp/mp/ports/esp32/makeimg.py \
+  sdkconfig bootloader/bootloader.bin \
   partition_table/partition-table.bin \
-  micropython.bin \
-  firmware.bin \
-  micropython.uf2
+  micropython.bin firmware.bin micropython.uf2
 ```
 
-### 烧录固件
-
-```bash
-esptool.py --chip esp32s3 --port COM3 write_flash 0x0 firmware.bin
-```
-
-## 部署
-
-### 1. 上传设备端代码
-
-将 `main/` 目录下的文件上传到 ESP32：
-
-```
-main/main.py        → 设备根目录 /main.py
-main/lib/           → 设备 /lib/ 目录
-```
-
-用 Thonny 或 mpremote：
-
-```bash
-mpremote connect COM3 cp main/main.py :main.py
-mpremote connect COM3 mkdir :lib
-mpremote connect COM3 cp main/lib/voice_hal.py :lib/voice_hal.py
-mpremote connect COM3 cp main/lib/voice_client.py :lib/voice_client.py
-```
-
-### 2. 修改配置
-
-编辑 `main/main.py` 顶部：
-
-```python
-WIFI_SSID   = "你的WiFi名"
-WIFI_PASS   = "你的WiFi密码"
-MQTT_BROKER = "你的服务器IP"
-```
-
-### 3. 启动服务端
-
-```bash
-cd web
-pip install -r requirements.txt
-python app.py        # MQTT + WebSocket + Web UI，端口 8080
-python voice_server.py   # 语音 ASR/LLM/TTS，端口 9000
-```
-
-Web 页面：`http://服务器IP:8080`
+> **Windows 注意：** 命令行长度限制可能导致 qstr 预处理失败，推荐使用 WSL 编译。
 
 ## 架构
 
 ```
-ESP32-S3
-  摄像头 QVGA 320×240
-      │
-      ├─ espdl 人脸检测（每 5 帧）
-      │       ├─ MQTT → esp32/face_detect      (检测结果 JSON)
-      │       └─ MQTT → esp32/face_detect/crop (64×64 人脸裁剪 base64)
-      │
-      ├─ 下采样 128×160 → TFT 显示 + 人脸框叠加
-      │
-      └─ I2S 按键 → 录音 → TCP → voice_server
-                               ASR + LLM + TTS
-                          ← 播放回复 + 执行动作
-                            (RGB / 蜂鸣器 / 人脸检测开关)
+ESP32-S3 (MicroPython, 双核)
+  核心0 — 主循环
+    摄像头 QVGA 320×240
+        │
+        ├─ espdl 人脸检测（每 5 帧）
+        │       ├─ MQTT → esp32/face_detect      (检测结果 JSON)
+        │       └─ MQTT → esp32/face_detect/crop  (64×64 人脸裁剪 base64)
+        │
+        └─ 下采样 128×160 → TFT 显示 + 人脸框叠加
 
-服务端
-  MQTT Broker (Mosquitto :1883)
-  Flask + SocketIO → WebSocket 实时推送 → Web 看板 (:8080)
-  voice_server.py → ASR / LLM / TTS (:9000)
+  核心1 — 语音线程 (_thread，不阻塞主循环)
+    按键 → I2S 录音 → TCP → 服务端
+                         ASR + LLM + TTS
+                    ← PCM 播放 + 执行动作
+                      (RGB / 蜂鸣器 / 人脸检测开关)
+
+服务端 (单进程 app.py)
+  HTTP  :8080  Flask + SocketIO → Web 看板
+  TCP   :9000  语音桥接 (PCM → ASR → LLM → TTS → PCM)
+  MQTT  :1883  订阅检测数据 + 裁剪图 + 传感器
 ```
 
 ## 功能
@@ -171,33 +177,45 @@ ESP32-S3
 - 5 个关键点标记
 - NTP 时间同步（北京时间）
 - MQTT 上报检测结果 + 人脸裁剪图
-- 语音交互：按键录音 → ASR → LLM → TTS 播放
+- 语音交互：按键录音 → ASR → LLM → TTS 播放（异步，不阻塞画面）
 - 语音控制：RGB 灯、蜂鸣器、人脸检测开关
+- Web 看板：实时检测记录、人脸图片、统计、文字聊天、设备控制
 
 ## MQTT Topic
 
-| Topic | 内容 |
-|-------|------|
-| `esp32/face_detect` | 检测结果 JSON（时间戳、人脸数、坐标、置信度） |
-| `esp32/face_detect/crop` | 最优人脸裁剪图（64×64 RGB565 base64） |
+| Topic | 方向 | 内容 |
+|-------|------|------|
+| `esp32/face_detect` | ESP32 → 服务端 | 检测结果 JSON（时间戳、人脸数、坐标、置信度） |
+| `esp32/face_detect/crop` | ESP32 → 服务端 | 最优人脸裁剪图（64×64 RGB565 base64） |
 
 ## 目录结构
 
 ```
-├── main/                   # 烧录到 ESP32 的文件
-│   ├── main.py             # 主程序
+├── main/                    # 上传到 ESP32 的文件
+│   ├── main.py              # 主程序 (v2.1)
+│   ├── config.json          # 设备配置（不提交）
+│   ├── config.json.example  # 配置模板
+│   ├── upload.sh            # 上传脚本
 │   └── lib/
-│       ├── voice_hal.py    # 硬件抽象层（I2S / RGB / 蜂鸣器 / 按键）
-│       └── voice_client.py # 语音交互 TCP 客户端
+│       ├── voice_hal.py     # 硬件抽象层（I2S / RGB / 蜂鸣器 / 按键）
+│       └── voice_client.py  # 语音交互 TCP 客户端
 │
-├── web/                    # 服务端
-│   ├── app.py              # Flask + MQTT + WebSocket
-│   ├── voice_server.py     # ASR / LLM / TTS
-│   ├── templates/index.html
-│   └── requirements.txt
+├── web/                     # 服务端（单进程）
+│   ├── app.py               # Flask + TCP + MQTT + MiMo API
+│   ├── .env                 # 服务端配置（不提交）
+│   ├── .env.example         # 配置模板
+│   ├── requirements.txt     # Python 依赖
+│   ├── start.sh             # 一键部署脚本
+│   └── static/
+│       ├── index.html       # Web 页面
+│       ├── style.css        # 样式
+│       └── app.js           # 前端逻辑
 │
-├── dist/                   # 历史发布版本
-├── legacy/                 # 早期原型
+├── dist/
+│   ├── firmware_v2.1.bin    # 预编译固件（espdl + camera + jpeg）
+│   └── flash.sh             # 烧录脚本
+│
+├── .gitignore
 └── README.md
 ```
 
@@ -205,16 +223,11 @@ ESP32-S3
 
 | 版本 | 更新内容 |
 |------|---------|
+| v2.1 | 语音异步化、启动日志美化、项目结构整理、config.json 外置配置 |
 | v2.0 | 语音控制集成（I2S 麦克风 + 喇叭，ASR/LLM/TTS） |
 | v1.9 | 人脸裁剪上传（64×64 base64 → MQTT） |
 | v1.8 | 回退 QVGA 方案，帧率稳定至约 4.5 FPS |
-| v1.7 | 帧率优化：buffer 复用 + GC |
-| v1.6 | VGA 640×480 + 检测下采样（实验） |
 | v1.5 | 全画面缩放替代中心裁切 |
-| v1.4 | 修复时间戳（rtc_to_timestamp） |
-| v1.3 | NTP 使用 utime.localtime() |
-| v1.2 | 摄像头上下翻转 |
-| v1.1 | NTP 时间同步 |
 | v1.0 | 初始版本 |
 
 ## 许可

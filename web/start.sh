@@ -43,7 +43,7 @@ pip install -r requirements.txt -q
 
 # 检查 MQTT
 echo
-source .env 2>/dev/null || true
+set -a; source .env 2>/dev/null || true; set +a
 BROKER=${MQTT_BROKER:-127.0.0.1}
 if [ "$BROKER" = "127.0.0.1" ] || [ "$BROKER" = "localhost" ]; then
     if ! command -v mosquitto &>/dev/null; then

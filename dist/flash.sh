@@ -25,11 +25,11 @@ echo "端口: $PORT"
 echo
 
 echo "⏳ 擦除 Flash..."
-python -m esptool --chip esp32s3 --port $PORT erase-flash
+python3 -m esptool --chip esp32s3 --port $PORT erase-flash
 
 echo
 echo "⏳ 烧录固件..."
-python -m esptool --chip esp32s3 --port $PORT -b 460800 \
+python3 -m esptool --chip esp32s3 --port $PORT -b 460800 \
     write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
     0x0 $FW
 

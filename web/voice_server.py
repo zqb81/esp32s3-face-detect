@@ -29,7 +29,7 @@ logger = logging.getLogger("voice-server")
 # ===== MiMo API =====
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 except ImportError:
     pass
 
@@ -48,11 +48,11 @@ except ImportError:
     HAS_PAHO = False
     logger.warning("paho-mqtt 未安装，MQTT 上下文融合不可用")
 
-# ===== 配置 =====
-TCP_HOST = "0.0.0.0"
-TCP_PORT = 9000
-MQTT_BROKER = "127.0.0.1"
-MQTT_PORT = 1883
+# ===== 配置（优先读 .env，fallback 默认值）=====
+TCP_HOST = os.environ.get("TCP_HOST", "0.0.0.0")
+TCP_PORT = int(os.environ.get("TCP_PORT", 9000))
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "127.0.0.1")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
 SAMPLE_RATE = 16000
 CHANNELS = 1
 

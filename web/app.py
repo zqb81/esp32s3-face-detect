@@ -6,6 +6,7 @@
 - Web 界面显示
 """
 
+import os
 import json
 import time
 import sqlite3
@@ -18,19 +19,25 @@ import paho.mqtt.client as mqtt
 from PIL import Image
 import io
 
-# ===== 配置 =====
-MQTT_BROKER = "127.0.0.1"  # 本地 MQTT
-MQTT_PORT = 1883
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+except ImportError:
+    pass
+
+# ===== 配置（优先读 .env，fallback 默认值）=====
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "127.0.0.1")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
 MQTT_TOPIC = "esp32/face_detect"
-DB_PATH = "face_detect.db"
+DB_PATH = os.environ.get("DB_PATH", "face_detect.db")
 FACE_TOPIC = "esp32/face_detect"
 CROP_TOPIC = "esp32/face_detect/crop"
-HOST = "0.0.0.0"
-PORT = 8080
+HOST = os.environ.get("WEB_HOST", "0.0.0.0")
+PORT = int(os.environ.get("WEB_PORT", 8080))
 
 # ===== Flask 应用 =====
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'face_detect_secret'
+app.config['SECRET_KEY'] = os.environ.get("WEB_SECRET_KEY", "face_detect_secret")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ===== 数据库 =====

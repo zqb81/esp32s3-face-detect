@@ -152,8 +152,11 @@ ESP32-S3 (MicroPython, 双核)
     摄像头 QVGA 320×240
         │
         ├─ espdl 人脸检测（每 5 帧）
-        │       ├─ MQTT → esp32/face_detect      (检测结果 JSON)
-        │       └─ MQTT → esp32/face_detect/crop  (64×64 人脸裁剪 base64)
+        │       ├─ MQTT 发布 → esp32/face_detect      (检测结果 JSON)
+        │       └─ MQTT 发布 → esp32/face_detect/crop  (64×64 人脸裁剪)
+        │
+        ├─ MQTT 订阅 ← esp32/iot/cmd/#  (Web 设备控制)
+        │       → execute_voice_command() → RGB / 蜂鸣器 / 检测开关
         │
         └─ 下采样 128×160 → TFT 显示 + 人脸框叠加
 
@@ -161,12 +164,11 @@ ESP32-S3 (MicroPython, 双核)
     按键 → I2S 录音 → TCP → 服务端
                          ASR + LLM + TTS
                     ← PCM 播放 + 执行动作
-                      (RGB / 蜂鸣器 / 人脸检测开关)
 
 服务端 (单进程 app.py)
-  HTTP  :8080  Flask + SocketIO → Web 看板
+  HTTP  :8080  Flask + SocketIO → Web 看板 + 文字聊天 + 设备控制
   TCP   :9000  语音桥接 (PCM → ASR → LLM → TTS → PCM)
-  MQTT  :1883  订阅检测数据 + 裁剪图 + 传感器
+  MQTT  :1883  订阅检测数据 / 发布设备控制指令
 ```
 
 ## 功能
@@ -185,14 +187,17 @@ ESP32-S3 (MicroPython, 双核)
 
 | Topic | 方向 | 内容 |
 |-------|------|------|
-| `esp32/face_detect` | ESP32 → 服务端 | 检测结果 JSON（时间戳、人脸数、坐标、置信度） |
+| `esp32/face_detect` | ESP32 → 服务端 | 检测结果 JSON（时间戳、帧号、人脸数、坐标、置信度） |
 | `esp32/face_detect/crop` | ESP32 → 服务端 | 最优人脸裁剪图（64×64 RGB565 base64） |
+| `esp32/iot/cmd/rgb` | 服务端 → ESP32 | RGB 颜色（red/green/blue/off 等） |
+| `esp32/iot/cmd/buzzer` | 服务端 → ESP32 | 蜂鸣器开关（on/off） |
+| `esp32/iot/cmd/facedetect` | 服务端 → ESP32 | 人脸检测开关（on/off） |
 
 ## 目录结构
 
 ```
 ├── main/                    # 上传到 ESP32 的文件
-│   ├── main.py              # 主程序 (v2.1)
+│   ├── main.py              # 主程序 (v2.2)
 │   ├── config.json          # 设备配置（不提交）
 │   ├── config.json.example  # 配置模板
 │   ├── upload.sh            # 上传脚本
@@ -223,6 +228,7 @@ ESP32-S3 (MicroPython, 双核)
 
 | 版本 | 更新内容 |
 |------|---------|
+| v2.2 | MQTT 双向控制、Web RGB 选色、服务端合并单进程、审查修复 |
 | v2.1 | 语音异步化、启动日志美化、项目结构整理、config.json 外置配置 |
 | v2.0 | 语音控制集成（I2S 麦克风 + 喇叭，ASR/LLM/TTS） |
 | v1.9 | 人脸裁剪上传（64×64 base64 → MQTT） |

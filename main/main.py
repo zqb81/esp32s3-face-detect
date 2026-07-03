@@ -1,22 +1,19 @@
 # ESP32-S3 完整链路：摄像头→人脸检测→TFT实时画面→MQTT→Web
 # 实时画面 + 人脸框叠加 + WiFi + MQTT
-VERSION = "v2.1"
+VERSION = "v2.2"
 
 # ===== 变更日志 =====
 # v1.0 - 初始版本
 # v1.1 - NTP时间同步 + 版本号机制
 # v1.2 - 摄像头上下翻转
 # v1.3 - NTP使用utime.mktime()/localtime()
-# v1.3.1 - 修复缩进错误
 # v1.4 - 修复时间戳：用rtc_to_timestamp()替代time.time()
 # v1.5 - 全画面缩放替代中心裁切
-# v1.6 - VGA 640x480，检测下采样到320x240
-# v1.6.1 - 检测框放大系数1.3x
-# v1.7 - 帧率优化：buffer复用、GC、检测降频（VGA方案，效果不佳）
 # v1.8 - 回退QVGA方案：320x240统一，检测显示共用帧，帧率优化
 # v1.9 - 人脸裁剪上传：64×64 RGB565 base64 → MQTT
 # v2.0 - 语音控制集成：I2S麦克风+喇叭，按键语音交互，ASR/LLM/TTS
-# v2.1 - 语音异步化(_thread)，不阻塞主循环；启动日志美化；FPS打印降频
+# v2.1 - 语音异步化(_thread)，不阻塞主循环；启动日志美化；config.json外置
+# v2.2 - MQTT双向控制(订阅esp32/iot/cmd/#)；Web RGB选色；服务端合并单进程
 # =====
 
 import sys

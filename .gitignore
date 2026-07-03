@@ -8,6 +8,6 @@ __pycache__/
 build*/
 micropython-camera-API/
 mp_jpeg/
-.env
+web/.env
 .claude/
 main/config.json

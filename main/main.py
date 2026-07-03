@@ -283,14 +283,40 @@ def _set_manual_time():
 # ===== MQTT =====
 mqtt = None
 mqtt_ok = False
+CMD_TOPIC = "esp32/iot/cmd/#"   # 订阅所有控制指令
+_mqtt_cmds = []                 # Web 下发的指令队列
+
+def _mqtt_callback(topic, msg):
+    """MQTT 订阅回调：Web 设备控制按钮"""
+    try:
+        t = topic.decode() if isinstance(topic, bytes) else topic
+        payload = msg.decode() if isinstance(msg, bytes) else msg
+        # esp32/iot/cmd/fan → fan
+        act = t.rsplit("/", 1)[-1]
+
+        if act == "rgb":
+            _mqtt_cmds.append({"action": "rgb", "color": payload})
+        elif act == "led":
+            state = "on" if payload not in ("0", "off") else "off"
+            _mqtt_cmds.append({"action": "led", "state": state})
+        elif act == "facedetect":
+            _mqtt_cmds.append({"action": "face_detect", "state": payload})
+        elif act in ("fan", "buzzer"):
+            _mqtt_cmds.append({"action": act, "state": payload})
+        else:
+            print("[MQTT CMD] 未知:", t, payload)
+    except Exception as e:
+        print("[MQTT CMD] 解析失败:", e)
 
 def connect_mqtt():
     global mqtt, mqtt_ok
     try:
         mqtt = MQTTClient(CLIENT_ID, MQTT_BROKER, port=MQTT_PORT)
+        mqtt.set_callback(_mqtt_callback)
         mqtt.connect()
+        mqtt.subscribe(CMD_TOPIC)
         mqtt_ok = True
-        print(f"MQTT OK: {MQTT_BROKER}")
+        print("MQTT OK: %s (订阅 %s)" % (MQTT_BROKER, CMD_TOPIC))
     except Exception as e:
         mqtt_ok = False
         print(f"MQTT 失败: {e}")
@@ -538,6 +564,16 @@ try:
                 pending = list(_voice_actions)
                 _voice_actions.clear()
             execute_voice_command(pending)
+
+        # ===== 处理 MQTT 下发的控制指令（Web 按钮）=====
+        if mqtt_ok:
+            try:
+                mqtt.check_msg()
+            except:
+                pass
+            if _mqtt_cmds:
+                execute_voice_command(_mqtt_cmds)
+                _mqtt_cmds.clear()
 
         # 捕获
         img = cam.capture()

@@ -4,6 +4,7 @@ __pycache__/
 *.sqlite
 *.bin
 *.uf2
+!dist/*.bin
 build*/
 micropython-camera-API/
 mp_jpeg/

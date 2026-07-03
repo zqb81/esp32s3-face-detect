@@ -13,7 +13,7 @@ import sqlite3
 import threading
 import base64
 from datetime import datetime
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, send_from_directory, jsonify, request, Response
 from flask_socketio import SocketIO, emit
 import paho.mqtt.client as mqtt
 from PIL import Image
@@ -302,7 +302,7 @@ def start_mqtt():
 # ===== Web 路由 =====
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return send_from_directory('static', 'index.html')
 
 @app.route('/api/detections')
 def api_detections():

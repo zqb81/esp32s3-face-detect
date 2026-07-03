@@ -26,6 +26,7 @@ from flask import Flask, send_from_directory, jsonify, request, Response
 from flask_socketio import SocketIO, emit
 import paho.mqtt.client as mqtt
 from PIL import Image
+from openai import OpenAI
 
 try:
     from dotenv import load_dotenv
@@ -60,7 +61,6 @@ _llm_client = None
 def _get_llm():
     global _llm_client
     if _llm_client is None:
-        from openai import OpenAI
         _llm_client = OpenAI(api_key=XIAOMI_API_KEY, base_url="https://api.xiaomimimo.com/v1")
     return _llm_client
 

@@ -9,5 +9,6 @@ build*/
 micropython-camera-API/
 mp_jpeg/
 web/.env
+web/venv/
 .claude/
 main/config.json

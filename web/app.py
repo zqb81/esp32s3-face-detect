@@ -41,6 +41,8 @@ app.config['SECRET_KEY'] = os.environ.get("WEB_SECRET_KEY", "face_detect_secret"
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ===== 数据库 =====
+_db_lock = threading.Lock()
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -80,36 +82,37 @@ def init_db():
     conn.close()
 
 def save_detection(data):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    dt = datetime.fromtimestamp(data["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-    
-    c.execute('''
-        INSERT INTO detections (device, timestamp, datetime, frame, face_count, faces_json)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (
-        data["device"],
-        data["timestamp"],
-        dt,
-        data["frame"],
-        data["face_count"],
-        json.dumps(data["faces"])
-    ))
-    
-    detection_id = c.lastrowid
-    
-    for face in data["faces"]:
-        box = face["box"]
-        kp_json = json.dumps(face.get("keypoints", {}))
+    with _db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+
+        dt = datetime.fromtimestamp(data["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+
         c.execute('''
-            INSERT INTO faces (detection_id, score, x1, y1, x2, y2, keypoints_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (detection_id, face["score"], box[0], box[1], box[2], box[3], kp_json))
-    
-    conn.commit()
-    conn.close()
-    return detection_id
+            INSERT INTO detections (device, timestamp, datetime, frame, face_count, faces_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            data["device"],
+            data["timestamp"],
+            dt,
+            data["frame"],
+            data["face_count"],
+            json.dumps(data["faces"])
+        ))
+
+        detection_id = c.lastrowid
+
+        for face in data["faces"]:
+            box = face["box"]
+            kp_json = json.dumps(face.get("keypoints", {}))
+            c.execute('''
+                INSERT INTO faces (detection_id, score, x1, y1, x2, y2, keypoints_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (detection_id, face["score"], box[0], box[1], box[2], box[3], kp_json))
+
+        conn.commit()
+        conn.close()
+        return detection_id
 
 def get_recent_detections(limit=100):
     conn = sqlite3.connect(DB_PATH)
@@ -187,23 +190,24 @@ def save_face_image(data):
     jpeg_bytes = buf.getvalue()
     
     box = data.get("box", [0, 0, 0, 0])
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO face_images (device, timestamp, datetime, score, x1, y1, x2, y2, img_jpeg)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        data.get("device", "unknown"),
-        data.get("ts", 0),
-        data.get("time", ""),
-        data.get("score", 0),
-        box[0], box[1], box[2], box[3],
-        jpeg_bytes
-    ))
-    face_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return face_id
+    with _db_lock:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO face_images (device, timestamp, datetime, score, x1, y1, x2, y2, img_jpeg)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            data.get("device", "unknown"),
+            data.get("ts", 0),
+            data.get("time", ""),
+            data.get("score", 0),
+            box[0], box[1], box[2], box[3],
+            jpeg_bytes
+        ))
+        face_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        return face_id
 
 def get_recent_face_images(limit=20):
     conn = sqlite3.connect(DB_PATH)
@@ -218,28 +222,32 @@ def get_recent_face_images(limit=20):
     conn.close()
     return [{
         "id": r[0], "device": r[1], "datetime": r[2],
-        "score": r[3], "box": [r[4], r[5], r[6], r[7]]
+        "score": r[3], "box": [r[4], r[5], r[6], r[7]],
+        "img_url": f"/api/face_image/{r[0]}"
     } for r in rows]
 
 # ===== MQTT 回调 =====
 mqtt_client = None
+_face_context = {"count": 0, "faces": []}
+_sensor_cache = {}
 
-def on_mqtt_connect(client, userdata, flags, rc):
-    if rc == 0:
+def on_mqtt_connect(client, userdata, flags, rc, properties=None):
+    rc_val = rc.value if hasattr(rc, 'value') else rc
+    if rc_val == 0:
         print(f"✅ MQTT 已连接: {MQTT_BROKER}")
         client.subscribe(FACE_TOPIC)
         client.subscribe(CROP_TOPIC)
+        client.subscribe("esp32/iot/sensor")
         print(f"📡 订阅: {FACE_TOPIC}, {CROP_TOPIC}")
     else:
-        print(f"❌ MQTT 连接失败: {rc}")
+        print(f"❌ MQTT 连接失败: rc={rc}")
 
 def on_mqtt_message(client, userdata, msg):
     try:
         topic = msg.topic
         raw = json.loads(msg.payload.decode())
-        
+
         if topic == CROP_TOPIC:
-            # 人脸裁剪图片
             face_id = save_face_image(raw)
             if face_id:
                 socketio.emit('new_face_image', {
@@ -251,8 +259,11 @@ def on_mqtt_message(client, userdata, msg):
                     "img_url": f"/api/face_image/{face_id}"
                 }, namespace='/')
                 print(f"👤 人脸图片: ID={face_id} 置信度={raw.get('score', 0)}")
+
+        elif topic == "esp32/iot/sensor":
+            _sensor_cache.update(raw)
+
         else:
-            # 检测数据
             data = {
                 "device": raw.get("device", "unknown"),
                 "timestamp": raw.get("ts", raw.get("timestamp", time.time())),
@@ -261,18 +272,27 @@ def on_mqtt_message(client, userdata, msg):
                 "faces": raw.get("faces", []),
             }
             save_detection(data)
+            _face_context["count"] = data["face_count"]
+            _face_context["faces"] = data["faces"]
             socketio.emit('new_detection', data, namespace='/')
-            print(f"📨 收到: {data['device']} 帧{data['frame']} {data['face_count']}张人脸")
-        
+            print(f"📨 收到: {data['device']} {data['face_count']}张人脸")
+
     except Exception as e:
         print(f"处理消息错误: {e}")
 
 def start_mqtt():
     global mqtt_client
-    mqtt_client = mqtt.Client(client_id="web_face_server")
+    try:
+        mqtt_client = mqtt.Client(
+            client_id="web_face_server",
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        )
+    except (AttributeError, TypeError):
+        # paho-mqtt v1.x 没有 CallbackAPIVersion
+        mqtt_client = mqtt.Client(client_id="web_face_server")
     mqtt_client.on_connect = on_mqtt_connect
     mqtt_client.on_message = on_mqtt_message
-    
+
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         mqtt_client.loop_forever()
@@ -310,24 +330,6 @@ def api_face_images():
     return jsonify(get_recent_face_images(limit))
 
 # ===== 语音聊天 API =====
-_face_context = {"count": 0, "faces": []}
-
-def _update_face_context(data):
-    _face_context["count"] = data.get("face_count", 0)
-    _face_context["faces"] = data.get("faces", [])
-
-# 注入人脸上下文到 MQTT 回调
-_orig_on_mqtt = on_mqtt_message
-def _on_mqtt_with_face(client, userdata, msg):
-    _orig_on_mqtt(client, userdata, msg)
-    if msg.topic == FACE_TOPIC:
-        try:
-            raw = json.loads(msg.payload.decode())
-            _update_face_context(raw)
-        except Exception:
-            pass
-on_mqtt_message = _on_mqtt_with_face
-
 @app.route('/api/voice_chat', methods=['POST'])
 def api_voice_chat():
     data = request.get_json()
@@ -414,31 +416,11 @@ def api_device():
 
 @app.route('/api/sensors')
 def api_sensors():
-    temp, humi, light = None, None, None
-    if mqtt_client:
-        try:
-            import paho.mqtt.client as _mqtt
-            # Try to get cached sensor data
-            global _sensor_cache
-            if hasattr(app, '_sensor_cache'):
-                c = app._sensor_cache
-                temp = c.get('temperature')
-                humi = c.get('humidity')
-                light = c.get('light')
-        except: pass
-    return jsonify({"temperature": temp, "humidity": humi, "light": light})
-
-# Cache sensor data from MQTT
-_sensor_cache = {}
-_orig_mqtt_msg = on_mqtt_message
-def _on_mqtt_cache_sensor(client, userdata, msg):
-    _orig_mqtt_msg(client, userdata, msg)
-    if msg.topic == 'esp32/iot/sensor':
-        try:
-            d = json.loads(msg.payload.decode())
-            app._sensor_cache = d
-        except: pass
-on_mqtt_message = _on_mqtt_cache_sensor
+    return jsonify({
+        "temperature": _sensor_cache.get("temperature"),
+        "humidity": _sensor_cache.get("humidity"),
+        "light": _sensor_cache.get("light"),
+    })
 
 @socketio.on('connect')
 def handle_connect():

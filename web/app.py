@@ -302,6 +302,137 @@ def api_face_images():
     limit = request.args.get('limit', 20, type=int)
     return jsonify(get_recent_face_images(limit))
 
+# ===== 语音聊天 API =====
+_face_context = {"count": 0, "faces": []}
+
+def _update_face_context(data):
+    _face_context["count"] = data.get("face_count", 0)
+    _face_context["faces"] = data.get("faces", [])
+
+# 注入人脸上下文到 MQTT 回调
+_orig_on_mqtt = on_mqtt_message
+def _on_mqtt_with_face(client, userdata, msg):
+    _orig_on_mqtt(client, userdata, msg)
+    if msg.topic == FACE_TOPIC:
+        try:
+            raw = json.loads(msg.payload.decode())
+            _update_face_context(raw)
+        except Exception:
+            pass
+on_mqtt_message = _on_mqtt_with_face
+
+@app.route('/api/voice_chat', methods=['POST'])
+def api_voice_chat():
+    data = request.get_json()
+    text = data.get('text', '').strip()
+    if not text:
+        return jsonify({"reply": "请输入内容", "actions": []})
+
+    try:
+        from openai import OpenAI
+        import os
+        api_key = os.environ.get("XIAOMI_API_KEY", "")
+        if not api_key:
+            return jsonify({"reply": "API Key 未配置", "actions": []})
+
+        client_ai = OpenAI(api_key=api_key, base_url="https://api.xiaomimimo.com/v1")
+
+        ctx = ""
+        if _face_context["count"] > 0:
+            ctx = f"\n[当前人脸检测: 检测到 {_face_context['count']} 张人脸]"
+        else:
+            ctx = "\n[当前人脸检测: 未检测到人脸]"
+
+        system_prompt = (
+            "你是一个智能门禁+安防助手。用简洁口语回复，每次不超过3句话。"
+            "你可以控制: 风扇、LED灯、RGB灯带、蜂鸣器、人脸检测开关。"
+            "当用户要求控制设备时，在回复末尾用 [ACTION] 标记添加指令。\n"
+            '支持: [ACTION]{"action":"fan","state":"on"/"off"}[/ACTION]\n'
+            '[ACTION]{"action":"led","state":"on"/"off"}[/ACTION]\n'
+            '[ACTION]{"action":"buzzer","state":"on"/"off"}[/ACTION]\n'
+            '[ACTION]{"action":"face_detect","state":"on"/"off"}[/ACTION]\n'
+            '[ACTION]{"action":"rgb","color":"red/green/blue/off"}[/ACTION]\n'
+        )
+
+        resp = client_ai.chat.completions.create(
+            model="mimo-v2.5",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text + ctx}
+            ]
+        )
+        reply = resp.choices[0].message.content or ""
+
+        import re
+        actions = []
+        for m in re.finditer(r"\[ACTION\](.*?)\[/ACTION\]", reply, re.DOTALL):
+            try:
+                actions.append(json.loads(m.group(1)))
+            except: pass
+        clean = re.sub(r"\[ACTION\].*?\[/ACTION\]", "", reply, flags=re.DOTALL).strip()
+
+        return jsonify({"reply": clean, "actions": actions})
+    except Exception as e:
+        return jsonify({"reply": f"处理出错: {e}", "actions": []})
+
+@app.route('/api/device', methods=['POST'])
+def api_device():
+    data = request.get_json()
+    action = data.get('action', '')
+    state = data.get('state', 'on')
+
+    if mqtt_client:
+        if action == 'fan':
+            topic = 'esp32/iot/cmd/fan'
+            payload = state
+        elif action == 'led':
+            topic = 'esp32/iot/cmd/led'
+            payload = '100' if state == 'on' else '0'
+        elif action == 'buzzer':
+            topic = 'esp32/iot/cmd/buzzer'
+            payload = state
+        elif action == 'face_detect':
+            topic = 'esp32/iot/cmd/facedetect'
+            payload = state
+        elif action == 'rgb':
+            topic = 'esp32/iot/cmd/rgb'
+            payload = data.get('color', 'off')
+        else:
+            return jsonify({"ok": False, "msg": "unknown device"})
+
+        mqtt_client.publish(topic, payload)
+        return jsonify({"ok": True})
+
+    return jsonify({"ok": False, "msg": "MQTT not connected"})
+
+@app.route('/api/sensors')
+def api_sensors():
+    temp, humi, light = None, None, None
+    if mqtt_client:
+        try:
+            import paho.mqtt.client as _mqtt
+            # Try to get cached sensor data
+            global _sensor_cache
+            if hasattr(app, '_sensor_cache'):
+                c = app._sensor_cache
+                temp = c.get('temperature')
+                humi = c.get('humidity')
+                light = c.get('light')
+        except: pass
+    return jsonify({"temperature": temp, "humidity": humi, "light": light})
+
+# Cache sensor data from MQTT
+_sensor_cache = {}
+_orig_mqtt_msg = on_mqtt_message
+def _on_mqtt_cache_sensor(client, userdata, msg):
+    _orig_mqtt_msg(client, userdata, msg)
+    if msg.topic == 'esp32/iot/sensor':
+        try:
+            d = json.loads(msg.payload.decode())
+            app._sensor_cache = d
+        except: pass
+on_mqtt_message = _on_mqtt_cache_sensor
+
 @socketio.on('connect')
 def handle_connect():
     print("🔗 WebSocket 客户端连接")

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32-S3 人脸检测</title>
+    <title>ESP32-S3 人脸检测 + 语音控制</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -227,6 +227,36 @@
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        /* Voice & Device panels */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+        @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+        .chat-box { display: flex; flex-direction: column; height: 320px; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 12px; }
+        .chat-msg { margin-bottom: 10px; max-width: 85%; }
+        .chat-msg.user { margin-left: auto; }
+        .chat-msg .bubble { padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-break: break-word; }
+        .chat-msg.user .bubble { background: #3b82f6; color: #fff; border-bottom-right-radius: 4px; }
+        .chat-msg.ai .bubble { background: #1e293b; color: #e2e8f0; border-bottom-left-radius: 4px; border: 1px solid #334155; }
+        .chat-msg .time { font-size: 10px; color: #64748b; margin-top: 2px; }
+        .chat-input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #334155; }
+        .chat-input-row input { flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+        .chat-input-row input:focus { border-color: #3b82f6; }
+        .chat-input-row button { background: #3b82f6; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+        .chat-input-row button:hover { background: #2563eb; }
+        .chat-input-row button:disabled { background: #475569; cursor: not-allowed; }
+        .device-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
+        .device-card { background: #0f172a; border-radius: 10px; padding: 14px; border: 1px solid #334155; text-align: center; }
+        .device-card .icon { font-size: 28px; margin-bottom: 6px; }
+        .device-card .name { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
+        .toggle-btn { width: 48px; height: 26px; border-radius: 13px; border: none; cursor: pointer; position: relative; transition: background 0.3s; }
+        .toggle-btn.off { background: #475569; }
+        .toggle-btn.on { background: #22c55e; }
+        .toggle-btn::after { content: ''; position: absolute; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left 0.3s; }
+        .toggle-btn.off::after { left: 3px; }
+        .toggle-btn.on::after { left: 25px; }
+        .sensor-row { display: flex; gap: 16px; padding: 12px 16px; flex-wrap: wrap; }
+        .sensor-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #94a3b8; }
+        .sensor-item .val { color: #e2e8f0; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -242,6 +272,69 @@
 
     <div class="container">
         <div class="stats-grid">
+            <div class="stat-card">
+                <div class="label">总检测次数</div>
+                <div class="value" id="total-detections">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">总人脸数</div>
+                <div class="value" id="total-faces">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">设备数量</div>
+                <div class="value" id="devices">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">最后检测</div>
+                <div class="value" id="last-time" style="font-size: 16px;">-</div>
+            </div>
+        </div>
+
+        <!-- 传感器 + 设备控制 + 语音聊天 -->
+        <div class="two-col">
+            <div class="panel">
+                <div class="panel-header"><span>🎤 语音助手</span></div>
+                <div class="chat-box">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="chat-msg ai"><div class="bubble">你好！我是智能门禁助手，可以帮你控制设备、查询检测状态。试试对我说话吧。</div></div>
+                    </div>
+                    <div class="chat-input-row">
+                        <input type="text" id="chat-input" placeholder="输入语音命令..." onkeydown="if(event.key==='Enter')sendChat()">
+                        <button id="chat-send-btn" onclick="sendChat()">发送</button>
+                    </div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-header"><span>🎛️ 设备控制</span></div>
+                <div class="sensor-row" id="sensor-row">
+                    <div class="sensor-item">🌡️ 温度: <span class="val" id="s-temp">--</span></div>
+                    <div class="sensor-item">💧 湿度: <span class="val" id="s-humi">--</span></div>
+                    <div class="sensor-item">☀️ 光照: <span class="val" id="s-light">--</span></div>
+                </div>
+                <div class="device-grid">
+                    <div class="device-card">
+                        <div class="icon">🌀</div>
+                        <div class="name">风扇</div>
+                        <button class="toggle-btn off" id="btn-fan" onclick="toggleDevice('fan',this)"></button>
+                    </div>
+                    <div class="device-card">
+                        <div class="icon">💡</div>
+                        <div class="name">LED</div>
+                        <button class="toggle-btn off" id="btn-led" onclick="toggleDevice('led',this)"></button>
+                    </div>
+                    <div class="device-card">
+                        <div class="icon">🔔</div>
+                        <div class="name">蜂鸣器</div>
+                        <button class="toggle-btn off" id="btn-buzzer" onclick="toggleDevice('buzzer',this)"></button>
+                    </div>
+                    <div class="device-card">
+                        <div class="icon">👁️</div>
+                        <div class="name">人脸检测</div>
+                        <button class="toggle-btn on" id="btn-face" onclick="toggleDevice('face_detect',this)"></button>
+                    </div>
+                </div>
+            </div>
+        </div>
             <div class="stat-card">
                 <div class="label">总检测次数</div>
                 <div class="value" id="total-detections">-</div>
@@ -522,6 +615,84 @@
         loadStats();
         loadHistory();
         loadFaceImages();
+
+        // ===== 语音聊天 =====
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const chatSendBtn = document.getElementById('chat-send-btn');
+
+        function addChatMsg(role, text) {
+            const div = document.createElement('div');
+            div.className = 'chat-msg ' + role;
+            const now = new Date().toLocaleTimeString();
+            div.innerHTML = `<div class="bubble">${text}</div><div class="time">${now}</div>`;
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        async function sendChat() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+            chatInput.value = '';
+            addChatMsg('user', text);
+            chatSendBtn.disabled = true;
+            try {
+                const res = await fetch('/api/voice_chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text})
+                });
+                const data = await res.json();
+                addChatMsg('ai', data.reply || '(无回复)');
+                if (data.actions) {
+                    data.actions.forEach(a => {
+                        if (a.action === 'fan') updateToggle('btn-fan', a.state === 'on');
+                        if (a.action === 'led') updateToggle('btn-led', a.state === 'on');
+                        if (a.action === 'buzzer') updateToggle('btn-buzzer', a.state === 'on');
+                        if (a.action === 'face_detect') updateToggle('btn-face', a.state === 'on');
+                    });
+                }
+            } catch (e) {
+                addChatMsg('ai', '请求失败: ' + e.message);
+            }
+            chatSendBtn.disabled = false;
+        }
+
+        // ===== 设备控制 =====
+        function updateToggle(id, on) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.className = 'toggle-btn ' + (on ? 'on' : 'off');
+            }
+        }
+
+        async function toggleDevice(device, btn) {
+            const isOn = btn.classList.contains('on');
+            const newState = isOn ? 'off' : 'on';
+            try {
+                await fetch('/api/device', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({action: device, state: newState})
+                });
+                updateToggle(btn.id, !isOn);
+            } catch (e) {
+                console.error('设备控制失败:', e);
+            }
+        }
+
+        // ===== 传感器数据轮询 =====
+        async function loadSensors() {
+            try {
+                const res = await fetch('/api/sensors');
+                const data = await res.json();
+                document.getElementById('s-temp').textContent = data.temperature != null ? data.temperature + '°C' : '--';
+                document.getElementById('s-humi').textContent = data.humidity != null ? data.humidity + '%' : '--';
+                document.getElementById('s-light').textContent = data.light != null ? data.light : '--';
+            } catch (e) {}
+        }
+        loadSensors();
+        setInterval(loadSensors, 5000);
     </script>
 </body>
 </html>

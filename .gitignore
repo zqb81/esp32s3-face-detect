@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 *.db
 *.sqlite
+*.bin
+*.uf2
+build*/
+micropython-camera-API/
+mp_jpeg/

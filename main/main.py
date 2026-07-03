@@ -1,6 +1,6 @@
 # ESP32-S3 完整链路：摄像头→人脸检测→TFT实时画面→MQTT→Web
 # 实时画面 + 人脸框叠加 + WiFi + MQTT
-VERSION = "v2.0"
+VERSION = "v2.1"
 
 # ===== 变更日志 =====
 # v1.0 - 初始版本
@@ -16,6 +16,7 @@ VERSION = "v2.0"
 # v1.8 - 回退QVGA方案：320x240统一，检测显示共用帧，帧率优化
 # v1.9 - 人脸裁剪上传：64×64 RGB565 base64 → MQTT
 # v2.0 - 语音控制集成：I2S麦克风+喇叭，按键语音交互，ASR/LLM/TTS
+# v2.1 - 语音异步化(_thread)，不阻塞主循环；启动日志美化；FPS打印降频
 # =====
 
 import sys
@@ -29,6 +30,7 @@ import json
 from umqtt.simple import MQTTClient
 import gc
 import ubinascii
+import _thread
 import voice_hal as voice_hw
 import voice_client as voice
 
@@ -46,6 +48,11 @@ voice.SERVER_PORT = 9000
 
 # ===== 人脸检测控制 =====
 face_detect_enabled = True
+
+# ===== 语音异步控制 =====
+_voice_busy = False          # 语音线程正在运行
+_voice_actions = []          # 语音线程返回的动作队列
+_voice_lock = _thread.allocate_lock()
 
 # ===== TFT 配置 (ST7735 1.8寸) =====
 TFT_SCL = 14
@@ -102,7 +109,7 @@ def tft_init():
     tft_cmd(0x01); time.sleep_ms(150)
     tft_cmd(0x11); time.sleep_ms(255)
     tft_cmd(0x3A, [0x05])
-    tft_cmd(0x36, [0xC0])  
+    tft_cmd(0x36, [0xC0])
     tft_cmd(0x29)
     bl.value(1)
 
@@ -310,11 +317,11 @@ def crop_and_send(cam_buf, face):
     global last_crop_ts, mqtt_ok
     if not mqtt_ok:
         return
-    
+
     now = time.ticks_ms()
     if time.ticks_diff(now, last_crop_ts) < CROP_INTERVAL:
         return
-    
+
     box = face["box"]
     x1, y1, x2, y2 = box
     # BOX_SCALE 放大
@@ -330,7 +337,7 @@ def crop_and_send(cam_buf, face):
     sh = sy2 - sy1
     if sw <= 0 or sh <= 0:
         return
-    
+
     # 采样到 CROP_SIZE × CROP_SIZE
     crop = bytearray(CROP_SIZE * CROP_SIZE * 2)
     dst_i = 0
@@ -346,9 +353,9 @@ def crop_and_send(cam_buf, face):
             crop[dst_i] = cam_buf[src_off]
             crop[dst_i + 1] = cam_buf[src_off + 1]
             dst_i += 2
-    
+
     b64 = ubinascii.b2a_base64(crop).decode().rstrip()
-    
+
     try:
         msg = json.dumps({
             "type": "face_crop",
@@ -380,28 +387,38 @@ except ImportError:
 
 
 # ===== 初始化 =====
-print(f"=== ESP32-S3 实时显示 + 人脸检测 + MQTT [{VERSION}] ===")
+print()
+print("╔══════════════════════════════════════════╗")
+print("║  ESP32-S3 人脸检测系统  %s              ║" % VERSION)
+print("║  N16R8 · OV5640 · ST7735 · INMP441      ║")
+print("╚══════════════════════════════════════════╝")
+print()
 
 # 1. TFT
-print("初始化 TFT...")
+print("[INIT] TFT ST7735 ...", end=" ")
 tft_init()
+print("OK")
 
 # 2. WiFi
+print("[INIT] WiFi ...")
 wifi_ok = connect_wifi()
 
 # 3. NTP 时间同步
 if wifi_ok:
+    print("[INIT] NTP 时间同步 ...", end=" ")
     sync_ntp()
 
 # 4. MQTT
 if wifi_ok:
+    print("[INIT] MQTT ...", end=" ")
     connect_mqtt()
 
 # 5. 语音硬件
+print("[INIT] 语音硬件 ...")
 voice_hw.init_all()
 
 # 6. 摄像头
-print("初始化摄像头...")
+print("[INIT] 摄像头 OV5640 ...", end=" ")
 cam = camera.Camera(
     data_pins=[11, 9, 8, 10, 12, 18, 17, 16],
     pclk_pin=13,
@@ -415,47 +432,81 @@ cam = camera.Camera(
 )
 cam.init()
 time.sleep_ms(500)
+print("OK")
+
+# 启动汇总
+print()
+print("[SYS] WiFi: %s | MQTT: %s | 检测: %s | 语音: 异步"
+      % ("OK" if wifi_ok else "OFF",
+         "OK" if mqtt_ok else "OFF",
+         "ON" if HAS_DETECTOR else "OFF"))
+free_mem = gc.mem_free()
+print("[SYS] 空闲内存: %d KB" % (free_mem // 1024))
 
 # ===== 语音命令执行 =====
 def execute_voice_command(actions):
-    """执行语音交互返回的动作指令"""
+    """
+    执行语音交互返回的动作指令。
+    对齐 C 版本 voice_task.c execute_action()。
+    """
     global face_detect_enabled
     for cmd in actions:
         act = cmd.get("action", "")
-        if act == "face_detect":
-            state = cmd.get("state", "on")
-            face_detect_enabled = (state == "on")
-            print(f"[VOICE] 人脸检测: {'开启' if face_detect_enabled else '关闭'}")
-        elif act in ("motor", "fan"):
+
+        if act in ("fan", "motor"):          # stub — no free GPIO
             if cmd.get("state") == "on":
                 voice_hw.motor_on(cmd.get("speed", voice_hw.MOTOR_DUTY))
-                print("[VOICE] 风扇开启")
             else:
                 voice_hw.motor_off()
-                print("[VOICE] 风扇关闭")
-        elif act == "led":
+
+        elif act == "led":                   # stub — no free GPIO
             if cmd.get("state") == "on":
                 voice_hw.led_on()
             else:
                 voice_hw.led_off()
-            print(f"[VOICE] LED {cmd.get('state')}")
-        elif act == "rgb":
+
+        elif act == "rgb":                   # GPIO 38
             if "color" in cmd:
                 voice_hw.rgb_color(cmd["color"])
             else:
-                voice_hw.set_rgb_static(cmd.get("r", 0), cmd.get("g", 0), cmd.get("b", 0))
-            print("[VOICE] RGB 已更新")
-        elif act == "buzzer":
+                voice_hw.set_rgb_static(
+                    cmd.get("r", 0), cmd.get("g", 0), cmd.get("b", 0))
+            print("[VOICE] RGB →", cmd.get("color", "custom"))
+
+        elif act == "buzzer":                # GPIO 48
             if cmd.get("state") == "on":
                 voice_hw.buzzer_beep(cmd.get("times", 3))
             else:
                 voice_hw.buzzer_off()
-            print(f"[VOICE] 蜂鸣器 {cmd.get('state')}")
-        elif act == "info":
-            print(f"[VOICE] 信息: {cmd.get('msg', '')}")
+
+        elif act == "face_detect":           # Python 扩展动作
+            state = cmd.get("state", "on")
+            face_detect_enabled = (state == "on")
+            print("[VOICE] 人脸检测:", "开启" if state == "on" else "关闭")
+
+        else:
+            print("[VOICE] 未知指令:", act)
 
 
-print("开始运行... 按 Ctrl+C 停止")
+def _voice_thread():
+    """后台语音线程：录音 → ASR → LLM → TTS → 返回动作"""
+    global _voice_busy, _voice_actions
+    try:
+        voice_hw.rgb_color("green")      # 录音状态指示
+        ok, actions = voice.voice_interaction()
+        if ok and actions:
+            with _voice_lock:
+                _voice_actions.extend(actions)
+    except Exception as e:
+        print("[VOICE ERR]", e)
+    finally:
+        voice_hw.rgb_color("idle")       # 恢复待机色
+        _voice_busy = False
+        gc.collect()
+
+
+print("[SYS] 主循环启动，按 Ctrl+C 停止")
+print()
 
 # ===== 主循环 =====
 frame = 0
@@ -465,14 +516,18 @@ last_faces = []  # 缓存上一帧的人脸，中间帧复用
 
 try:
     while True:
-        # ===== 语音按键检测 =====
-        if voice_hw.consume_button_release():
-            print("[VOICE] 按键触发语音交互...")
-            # 暂停人脸检测，进行语音交互
-            ok, actions = voice.voice_interaction()
-            if ok and actions:
-                execute_voice_command(actions)
-            gc.collect()
+        # ===== 语音按键检测（异步启动）=====
+        if voice_hw.consume_button_release() and not _voice_busy:
+            _voice_busy = True
+            print("[VOICE] 按键触发 → 后台录音...")
+            _thread.start_new_thread(_voice_thread, ())
+
+        # ===== 处理语音线程返回的动作 =====
+        if _voice_actions:
+            with _voice_lock:
+                pending = list(_voice_actions)
+                _voice_actions.clear()
+            execute_voice_command(pending)
 
         # 捕获
         img = cam.capture()
@@ -508,18 +563,22 @@ try:
         if frame % 10 == 0:
             gc.collect()
 
-        # FPS
+        # FPS（每 3 秒打印一次，减少刷屏）
         frame += 1
         fps_n += 1
         elapsed = time.ticks_diff(time.ticks_ms(), fps_t)
-        if elapsed >= 1000:
+        if elapsed >= 3000:
             fps = fps_n * 1000 / elapsed
-            print(f"FPS: {fps:.1f} | 人脸: {len(faces)} | 帧: {frame} | MQTT: {'OK' if mqtt_ok else 'OFF'}")
+            mem_k = gc.mem_free() // 1024
+            voice_tag = " 🎙" if _voice_busy else ""
+            print("[RUN] %.1f FPS | 人脸 %d | 帧 %d | 内存 %dKB | MQTT %s%s"
+                  % (fps, len(faces), frame, mem_k,
+                     "OK" if mqtt_ok else "OFF", voice_tag))
             fps_t = time.ticks_ms()
             fps_n = 0
 
 except KeyboardInterrupt:
-    print(f"\n停止 (共 {frame} 帧)")
+    print("\n[SYS] 停止 (共 %d 帧)" % frame)
 finally:
     bl.value(0)
     cam.deinit()
@@ -530,4 +589,4 @@ finally:
             mqtt.disconnect()
         except:
             pass
-    print("已关闭")
+    print("[SYS] 已关闭")
